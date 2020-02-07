@@ -240,7 +240,7 @@ class Save extends Action
                 $node['id'] = $nodeId;
                 $convertedTree[] = $node;
 
-                $convertedTree = array_merge($convertedTree, $this->_convertTree($node['columns'],$nodeId));
+                $convertedTree = array_merge($convertedTree, $this->_convertTree($node['columns'], $nodeId));
             }
         }
         return $convertedTree;
