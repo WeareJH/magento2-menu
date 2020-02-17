@@ -83,11 +83,13 @@ class Save extends Action
     public function execute()
     {
         $id = $this->getRequest()->getParam('id');
+
         if ($id) {
             $menu = $this->menuRepository->getById($id);
         } else {
             $menu = $this->menuFactory->create();
         }
+
         $menu->setTitle($this->getRequest()->getParam('title'));
         $menu->setIdentifier($this->getRequest()->getParam('identifier'));
         $menu->setCssClass($this->getRequest()->getParam('css_class'));
@@ -103,48 +105,61 @@ class Save extends Action
         $nodes = $this->getRequest()->getParam('serialized_nodes');
         if (!empty($nodes)) {
             $nodes = json_decode($nodes, true);
+
             $nodes = $this->_convertTree($nodes, '#');
 
             if (!empty($nodes)) {
+                $filterBuilder         = $this->filterBuilderFactory->create();
+                $filter                = $filterBuilder->setField('menu_id')->setValue($id)->setConditionType('eq')->create();
 
-                $filterBuilder = $this->filterBuilderFactory->create();
-                $filter = $filterBuilder->setField('menu_id')->setValue($id)->setConditionType('eq')->create();
 
-                $filterGroupBuilder = $this->filterGroupBuilderFactory->create();
-                $filterGroup = $filterGroupBuilder->addFilter($filter)->create();
+                $filterGroupBuilder    = $this->filterGroupBuilderFactory->create();
+                $filterGroup           = $filterGroupBuilder->addFilter($filter)->create();
 
                 $searchCriteriaBuilder = $this->searchCriteriaBuilderFactory->create();
-                $searchCriteria = $searchCriteriaBuilder->setFilterGroups([$filterGroup])->create();
+                $searchCriteria        = $searchCriteriaBuilder->setFilterGroups([$filterGroup])->create();
 
-                $oldNodes = $this->nodeRepository->getList($searchCriteria)->getItems();
+                // grab collection of current nodes...
+                $existingNodesCollection = $this->nodeRepository->getList($searchCriteria)->getItems();
 
+                // ...and create array
                 $existingNodes = [];
-                foreach ($oldNodes as $node) {
+                foreach ($existingNodesCollection as $node) {
                     $existingNodes[$node->getId()] = $node;
                 }
 
+                // mark all EXISTING nodes as 'to be deleted'
                 $nodesToDelete = [];
-                foreach ($existingNodes as $nodeId => $noe) {
+                foreach ($existingNodes as $nodeId => $node) {
                     $nodesToDelete[$nodeId] = true;
                 }
 
                 $nodeMap = [];
 
-                foreach ($nodes as $node) {
+                foreach ($nodes as $nodeKey => $node) {
                     $nodeId = $node['id'];
-                    $matches = [];
-                    if (preg_match('/^node_([0-9]+)$/', $nodeId, $matches)) {
-                        $nodeId = $matches[1];
+                    // remove EXISTING node from deletion if it exists within $nodes...
+                    if (array_key_exists($nodeId, $nodesToDelete)) {
                         unset($nodesToDelete[$nodeId]);
-                        $nodeMap[$node['id']] = $existingNodes[$nodeId];
+
+
+                        // ...and add onto $nodeMap, to be updated later
+                        $existingNode = $existingNodes[$nodeId];
+                        $nodeMap[$nodeId] = $existingNode;
                     } else {
                         $nodeObject = $this->nodeFactory->create();
+
                         $nodeObject->setMenuId($id);
+
                         $nodeObject = $this->nodeRepository->save($nodeObject);
+
                         $nodeMap[$nodeId] = $nodeObject;
                     }
                 }
 
+                // note: if parent node is deleted ANY child nodes are also deleted (as they are not passed through the request)
+
+                // delete nodes which are stored in db, but dont exist on request
                 foreach (array_keys($nodesToDelete) as $nodeId) {
                     $this->nodeRepository->deleteById($nodeId);
                 }
@@ -152,20 +167,18 @@ class Save extends Action
                 $path = [
                     '#' => 0,
                 ];
-                foreach ($nodes as $node) {
-                    if ($node['type'] == 'product' && !$this->validateProductNode($node)) {
-                        continue;
-                    }
-                    $nodeObject = $nodeMap[$node['id']];
-
+                foreach ($nodes as $key => $node) {
+                    $nodeId = $node['id'];
+                    $nodeObject = $nodeMap[$nodeId];
                     $parents = array_keys($path);
                     $parent = array_pop($parents);
+
                     while ($parent != $node['parent']) {
                         array_pop($path);
                         $parent = array_pop($parents);
                     }
 
-                    $level = count($path) - 1;
+                    $level    = count($path) - 1;
                     $position = $path[$node['parent']]++;
 
                     if ($node['parent'] == '#') {
@@ -190,9 +203,13 @@ class Save extends Action
                     $nodeObject->setLevel($level);
                     $nodeObject->setPosition($position);
 
-                    $this->nodeRepository->save($nodeObject);
+                    if($nodeObject->hasDataChanges()) {
+                        $nodeObject->setUpdateTime(null);
+                        $this->nodeRepository->save($nodeObject);
+                    }
 
                     $path[$node['id']] = 0;
+
                 }
             }
         }
@@ -207,6 +224,7 @@ class Save extends Action
         return $redirect;
     }
 
+
     protected function _isAllowed()
     {
         return $this->_authorization->isAllowed('Snowdog_Menu::menus');
@@ -218,8 +236,11 @@ class Save extends Action
         if (!empty($nodes)) {
             foreach ($nodes as $node) {
                 $node['parent'] = $parent;
+                $nodeId = \array_key_exists('initialId',$node) ? $node['initialId'] : $node['id'];
+                $node['id'] = $nodeId;
                 $convertedTree[] = $node;
-                $convertedTree = array_merge($convertedTree, $this->_convertTree($node['columns'], $node['id']));
+
+                $convertedTree = array_merge($convertedTree, $this->_convertTree($node['columns'], $nodeId));
             }
         }
         return $convertedTree;

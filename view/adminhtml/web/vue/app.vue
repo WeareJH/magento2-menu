@@ -89,6 +89,8 @@ define(["Vue"], function(Vue) {
                 });
             },
             handleDrop(data) {
+                //Set intiial id of existing nodes
+                data.item.initialId = typeof(data.item.initialId) == 'undefined' ? data.item.id : data.item.initialId;
                 data.item.id = new Date().getTime();
                 data.list.splice(data.index, 0, data.item);
             }
